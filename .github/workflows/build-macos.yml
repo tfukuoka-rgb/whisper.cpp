@@ -1,0 +1,59 @@
+name: build whisper.cpp (macOS arm64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model name (e.g., base.en, small.en, medium, etc.)"
+        required: true
+        default: "base.en"
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure (Release, arm64)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Download model
+        run: |
+          bash ./models/download-ggml-model.sh "${{ inputs.model }}"
+          ls -lah models
+
+      - name: Package
+        run: |
+          set -eux
+          mkdir -p dist/bin dist/models
+          cp build/bin/whisper-cli dist/bin/
+          cp "models/ggml-${{ inputs.model }}.bin" dist/models/
+
+          cat > dist/README.txt << 'EOF'
+          whisper.cpp prebuilt (macOS arm64)
+
+          Run example:
+            chmod +x ./bin/whisper-cli
+            ./bin/whisper-cli -m ./models/ggml-<model>.bin -f <audio.wav>
+
+          If Gatekeeper blocks execution:
+            xattr -dr com.apple.quarantine ./bin/whisper-cli
+          EOF
+
+          tar -czf whisper-macos-arm64.tgz -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-macos-arm64
+          path: whisper-macos-arm64.tgz
