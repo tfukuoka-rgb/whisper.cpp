@@ -2,53 +2,58 @@ name: build whisper.cpp (macOS arm64)
 
 on:
   workflow_dispatch:
-    inputs:
-      model:
-        description: "Model name (e.g., base.en, small.en, medium, etc.)"
-        required: true
-        default: "base.en"
 
 jobs:
-  build:
+  build-macos:
     runs-on: macos-15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Configure (Release, arm64)
         run: |
-          cmake -B build \
+          cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_SERVER=ON \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON
 
-      - name: Build
-        run: cmake --build build -j
-
-      - name: Download model
-        run: |
-          bash ./models/download-ggml-model.sh "${{ inputs.model }}"
-          ls -lah models
-
-      - name: Package
+      - name: Build (whisper-cli + server)
         run: |
           set -eux
-          mkdir -p dist/bin dist/models
-          cp build/bin/whisper-cli dist/bin/
-          cp "models/ggml-${{ inputs.model }}.bin" dist/models/
+          cmake --build build --config Release --target whisper-cli
 
-          cat > dist/README.txt << 'EOF'
-          whisper.cpp prebuilt (macOS arm64)
+          # server のターゲット名が揺れることがあるため両方試す
+          cmake --build build --config Release --target whisper-server \
+            || cmake --build build --config Release --target whisper-whisper-server
 
-          Run example:
-            chmod +x ./bin/whisper-cli
-            ./bin/whisper-cli -m ./models/ggml-<model>.bin -f <audio.wav>
+          ls -lah build/bin
 
-          If Gatekeeper blocks execution:
-            xattr -dr com.apple.quarantine ./bin/whisper-cli
-          EOF
+      - name: Bundle artifacts
+        run: |
+          set -eux
+          rm -rf dist
+          mkdir -p dist/bin
+
+          # CLI
+          cp -v build/bin/whisper-cli dist/bin/whisper-cli
+
+          # Server: どちらか存在する方を拾って "whisper-server" に正規化
+          if [ -f build/bin/whisper-server ]; then
+            cp -v build/bin/whisper-server dist/bin/whisper-server
+          elif [ -f build/bin/whisper-whisper-server ]; then
+            cp -v build/bin/whisper-whisper-server dist/bin/whisper-server
+          else
+            echo "ERROR: server binary not found in build/bin" >&2
+            exit 1
+          fi
+
+          # ここに models を同梱したいなら、別途 dist/models にコピーする
+          # mkdir -p dist/models && cp -v models/*.bin dist/models/
 
           tar -czf whisper-macos-arm64.tgz -C dist .
 
